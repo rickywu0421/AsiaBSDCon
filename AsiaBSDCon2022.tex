@@ -47,13 +47,13 @@ enweiwu@FreeBSD.org}
 \maketitle
 
 \begin{abstract}
-Wtap, an 802.11 hardware simulator for testing net80211(4), originally supported 802.11s mesh mode and we have enhanced it to support more operating modes, enabling more thorough testing of net80211(4). In addition, we have improved the frame-capture capability by providing more information about 802.11 frames. To facilitate automatic testing, we have written an atf-sh(3) test script for wtap(4) that can perform tests in every operating mode unit.
+Wtap, an 802.11 hardware simulator for testing net80211(4), originally supported 802.11s mesh mode and we have enhanced it to support more operating modes, enabling more thorough testing of net80211(4). In addition, we have improved the frame-capture capability by providing more information about 802.11 frames. To facilitate automatic testing, we have written an atf-sh(3) test script for wtap(4) that can perform tests in every operating mode unit. To simplify the efforts of building an environment for wtap(4), we have introduced the user-space tool wtapctl(8).
 \end{abstract}
 
 \section{Introduction}
 Testing the net80211(4) presents several challenges, as it must function with both the 802.11 device driver and the underlying hardware (or firmware). It is highly unlikely that 802.11 drivers are completely free of bugs, as they rely on hardware components. An 802.11 driver with no hardware dependencies could be created by simulating the hardware within the driver. This would allow all operations to be carried out in software, simplifying the process of identifying and fixing bugs compared to working with hardware directly.
 
-FreeBSD's wtap(4) driver is an all-software 802.11 driver that was introduced by Monthadar Al Jaberi \cite{commit:wtap_origin} and initially supported the 802.11s mesh mode. Since then, we have added support for various other operating modes, including IBSS mode \cite{commit:adhoc}, STA and HostAP mode \cite{commit:hostap}, and monitor mode \cite{commit:monitor}. These added capabilities allow us to test net80211(4) more thoroughly and make wtap(4) a more general simulator for 802.11. Additionally, we have enhanced the 802.11 capturing facilities called radiotap on wtap(4) \cite{commit:monitor}. When used in conjunction with monitor mode, we can get more information in capturing 802.11 frames and use them for debugging purposes. To automate the building and testing of wtap(4), we have created a test script using the atf-sh(3) framework \cite{commit:atf}.
+FreeBSD's wtap(4) driver is an all-software 802.11 driver that was introduced by Monthadar Al Jaberi \cite{commit:wtap_origin} and initially supported the 802.11s mesh mode. Since then, we have added support for various other operating modes, including IBSS mode \cite{commit:adhoc}, STA and HostAP mode \cite{commit:hostap}, and monitor mode \cite{commit:monitor}. These added capabilities allow us to test net80211(4) more thoroughly and make wtap(4) a more general simulator for 802.11. Additionally, we have enhanced the 802.11 capturing facilities called radiotap on wtap(4) \cite{commit:monitor}. When used in conjunction with monitor mode, we can get more information in capturing 802.11 frames and use them for debugging purposes. To automate the building and testing of wtap(4), we have created a test script using the atf-sh(3) framework \cite{commit:atf}. In order to simplify the difficulty of building the environment of wtap(4), we have introduced the user-space tool wtapctl(8) \cite{commit:wtapctl}.
 
 Thanks to wtap(4), we can thoroughly test net80211(4) in various operating modes. In the future, we plan to enhance wtap(4) with key management and encryption capabilities to enable more comprehensive testing of wpa\_supplicant(8) and hostapd(8). And supports important features in 802.11n HT (high throughput), such as A-MPDU to facilitate testing HT-related functions in net80211(4).
 
@@ -320,12 +320,19 @@ Every input packet from monitor vap will then be passed to bpf(4) for capturing 
 \section{Experiment}
 Testing net80211(4) is the goal for wtap(4). The simplest experiment is to do a ping(8) test between two wtap vap running on the same operating mode. If they both succeed in the transmission and reception of ICMP packets, it means net80211(4) has already successfully handled the packets so the lower-level wtap(4) and upper-level protocol stack can see the packets.
 
-In this chapter, we first describe why we need to isolate the network stacks from every vap and then go into the per-operating-mode testing.
+In this chapter, we first describe why we need to isolate the network stacks from every vap, then introduce the user-space tool wtapctl(8), and finally go into the per-operating-mode testing.
 
 We also have written a test script in atf-sh(3) for automatically building and testing wtap(4) and net80211(4). The patch can be found in \cite{commit:atf}.
 
 \subsection{Isolation of Network Stack}
 To do the ping(8) test, we need to isolate the network stack (precisely, the routing table) of every vap, otherwise, the network stack will find that the two (or more) vaps are on the same host and lo(4) will be used instead of wtap(4). The isolation of the protocol stack is done by jail(8) and vnet(9).
+
+\subsection{User-space tool wtapctl(8)}
+We have introduced the new tool wtapctl(8) for controlling two aspect of wtap(4): device manipulation and visibility control. The wtapctl(8) utility has replaced the older tools located in tools/tools/wtap and is now located in usr.sbin, as it is necessary for building wtap(4).
+
+The wtapctl(8) is introduced in the patch \cite{commit:wtapctl}. 
+
+We will see how wtapctl(8) works with wtap(4) to build the experiment environment in the next section.
 
 \subsection{IBSS Mode}
 Figure \ref{fig:ibss-test} shows the testing environment of wtap(4) in IBSS mode:
@@ -338,26 +345,28 @@ Figure \ref{fig:ibss-test} shows the testing environment of wtap(4) in IBSS mode
 
 Let’s go into more detail.
 
-First of all, we create two wtap devices by the wtap tool and use the vis\_map tool to enable the traffic between the two devices. These tools are located in \lstinline{src/tools/tools/wtap}.
+First of all, we create two wtap devices and enable the traffic between the two devices by the wtapctl(8).
 
 \begin{lstlisting}[caption=Create wtap devices, label={lst:wtap_tool}]
-/* Create wtap devices */
-./wtap c 0
-./wtap c 1
+/* Create two wtap devices */
+./wtapctl device create // wtap0
+./wtapctl device create // wtap1
 
 /* Open wtap medium */
-./vis_map o
+./wtapctl vis open
 
 /* Link two wtap devices */
-./vis_map a 0 1
-./vis_map a 1 0
+./wtapctl vis add 0 1
+./wtapctl vis add 1 0
 \end{lstlisting}
 
-We can confirm the creation of wtap devices by sysctl(8):
+The initial execution of \lstinline{./wtapctl device create} should display \lstinline{wtap0} as the output if it is the first time using wtapctl(8) and no errors occur. Subsequent calls will output \lstinline{wtap1}, and so on. We do not need to assign the unit number since wtap(4) HAL will automatically find the least and not-begin-used number and assign it for us (this is done by the patch \cite{commit:wtapctl}).
+
+We can confirm the creation of wtap devices by wtapctl(8):
 
 \begin{lstlisting}[caption=Show wtap devices, label={lst:sysctl}]
-$ sysctl net.wlan.devices
-net.wlan.devices: wtap1 wtap0
+$ wtapctl device list
+wtap0 wtap1
 \end{lstlisting}
 
 We can now create two IBSS vaps: wlan0 and wlan1, on top of the wtap devices wtap0 and wtap1 respectively, and assign the same SSID "test" for each vap.
@@ -456,12 +465,12 @@ We took the same way as in STA/HostAP mode building and setting wtap devices, cr
 
 \begin{lstlisting}
 /* Create a new wtap device */
-./wtap c 2
+./wtapctl device create
 
 /* HostAP device -> Monitor device  */
-./vis_map a 0 2
+./wtapctl vis add 0 2
 /* STA device -> Monitor device  */
-./vis_map a 1 2
+./wtapctl vis add 1 2
 
 /* Create monitor vap */
 ifconfig wlan2 create \
@@ -475,7 +484,7 @@ tcpdump -y IEEE802_11_RADIO -i wlan2
 \end{lstlisting}
 
 \section{Conclusion}
-Our work has made wtap(4) a more general 802.11 hardware simulator, as we have enhanced it to support additional modes such as IBSS, STA, HostAP, and Monitor, allowing it to be used to test net80211(4) in various operating modes. In addition, we have improved its ability to capture 802.11 frames, making it possible to retrieve TX/RX rate and channel information using tcpdump(8). To facilitate the building and testing process of wtap(4) and net80211(4), we have also developed a test script written in the atf-sh(3) framework (as described in \cite{commit:atf}).
+Our work has made wtap(4) a more general 802.11 hardware simulator, as we have enhanced it to support additional modes such as IBSS, STA, HostAP, and Monitor, allowing it to be used to test net80211(4) in various operating modes. In addition, we have improved its ability to capture 802.11 frames, making it possible to retrieve TX/RX rate and channel information using tcpdump(8). To facilitate the building and testing process of wtap(4) and net80211(4), we have also developed a test script written in the atf-sh(3) framework (as described in \cite{commit:atf}). To conveniently manipulate the wtap device and visibility plugin, we have introduced the user-space tool wtapctl(8).
 
 In summary, wtap(4) is now a powerful 802.11 simulator that can be used to test net80211(4) without the need for any hardware components. Anyone looking to test or develop net80211(4) should consider using this simulator, and if possible, contribute to expanding its support for more 802.11 features.
 
@@ -487,6 +496,7 @@ In summary, wtap(4) is now a powerful 802.11 simulator that can be used to test 
 \bibitem{commit:hostap} https://reviews.freebsd.org/D36243
 \bibitem{commit:monitor} https://reviews.freebsd.org/D36469
 \bibitem{commit:atf} https://reviews.freebsd.org/D36480
+\bibitem{commit:wtapctl} https://reviews.freebsd.org/D37973
 \bibitem{IEEE80211_2007} IEEE Std 802.11-2007, 12 June 2007
 \bibitem{commit:mlme} https://reviews.freebsd.org/D36242
 \end{thebibliography}
